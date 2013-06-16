@@ -32,6 +32,7 @@ var PostGISSource = function(options) {
   this._projectionRaw = options.projection && options.projection.indexOf('EPSG')? options.projection.slice(options.projection.indexOf(':')+1):null; // for PostGIS < v1.5, if we want to support it
   this._connectionString = options.connectionString; // required
   this._tableName = options.tableName;               // required
+  this._requestParams = options.requestParams;               // required
   this._geomField = options.geomField;               // required
   this._attrFields = __.isArray(options.fields) ? 
                        options.fields.join(',') : 
@@ -55,7 +56,7 @@ PostGISSource.prototype = {
   // if (!projector.equals(projection,mapProjection){
   //    var query = SELECT ST_TRANSFORM(query, projection, mapProjecion)
 
-  getShapes: function(minX, minY, maxX, maxY, mapProjection, callback) {
+  getShapes: function(minX, minY, maxX, maxY, mapProjection, request, callback) {
     // console.log("GETSHAPES", this._projection, mapProjection);
     // we don't get real coordinates from Map.js yet so we'll fake it for now
     // minX = -122.4565;
@@ -79,12 +80,40 @@ PostGISSource.prototype = {
       var start, query;
         
       start = Date.now();
+      
+      
+      // default to returning all fields from database, but if user provides list only get those
+      attrFields = "* ";
       if (this._attrFields) {
-        query = "SELECT ST_AsGeoJson("+this._geomField+") as geometry, "+this._attrFields+" FROM "+this._tableName+" WHERE "+this._geomField+" && ST_MakeEnvelope($1,$2,$3,$4);";
+        attrFields = this._attrFields;
       }
-      else {
-        query = "SELECT ST_AsGeoJson("+this._geomField+") as geometry,* FROM "+this._tableName+" WHERE "+this._geomField+" && ST_MakeEnvelope($1,$2,$3,$4);";
+      
+      requestParams = this._requestParams;
+      var requiredConditions = [];
+
+      requiredConditions.push(" ST_MakeEnvelope($1,$2,$3,$4, -1) ");
+
+      if (request.query && requestParams) {
+                
+        for(var paramName in requestParams) {
+           if(requestParams.hasOwnProperty(paramName)) {
+             var paramOptions = requestParams[paramName];
+              // @TODO implement required conditions using paramOptions.required
+             if(request.query[paramName]){
+               requiredConditions.push(' '+ paramOptions['statement'].toString().replace(':'+paramName, request.query[paramName]) + ' ');             
+             }
+           }
+        }
       }
+
+
+      
+      var sqlConditions =  ' && ' + requiredConditions.join(' AND ');
+      
+      
+      console.log('SQL Conditions '+ sqlConditions);
+      query = "SELECT ST_AsGeoJson("+this._geomField+") as geometry,"+attrFields+" FROM "+this._tableName+" WHERE "+this._geomField + " " + sqlConditions + ";";
+
       // console.log("Querying... "+query+" "+min+", "+max);
       client.query(query, [min[0], min[1], max[0], max[1]], function(err, result) {
         if (err) { return callback(err, null); }
